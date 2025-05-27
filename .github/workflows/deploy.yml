@@ -1,0 +1,111 @@
+name: Deploy Todo App to AWS with Auto Destroy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      TF_IN_AUTOMATION: true
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set AWS Credentials
+        run: |
+          mkdir -p ~/.aws
+          echo "[default]
+          aws_access_key_id = ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws_secret_access_key = ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          region = us-east-1" > ~/.aws/credentials
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Install Terraform CLI
+        run: |
+          wget -O- https://apt.releases.hashicorp.com/gpg  | gpg --dearmor | sudo tee /usr/share/keyrings/hashicorp-archive-keyring.gpg >/dev/null
+          echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com  $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+          sudo apt update && sudo apt install terraform -y
+
+      - name: Initialize Terraform
+        run: terraform init
+
+      - name: Apply Terraform
+        id: apply
+        run: |
+          terraform apply -auto-approve \
+            -var "aws_access_key=${{ secrets.AWS_ACCESS_KEY_ID }}" \
+            -var "aws_secret_key=${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
+            -var "key_pair_name=${{ secrets.KEY_PAIR_NAME }}"
+        continue-on-error: false
+
+      - name: Extract Public IP
+        id: ip
+        run: |
+          # Extract only the public IP cleanly
+          INSTANCE_IP=$(terraform output -raw public_ip | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n 1)
+          echo "INSTANCE_IP=$INSTANCE_IP" >> $GITHUB_ENV
+
+      - name: Build and Push Docker Image
+        id: docker
+        run: |
+          docker build -t your-dockerhub-username/todo-api:latest ./api
+          docker login -u ${{ secrets.DOCKER_USER }} -p ${{ secrets.DOCKER_PASS }}
+          docker push your-dockerhub-username/todo-api:latest
+        env:
+          DOCKER_USER: ${{ secrets.DOCKER_USER }}
+          DOCKER_PASS: ${{ secrets.DOCKER_PASS }}
+        continue-on-error: false
+
+      - name: Setup SSH Agent
+        uses: webfactory/ssh-agent@v0.5.4
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Deploy to Server via SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ env.INSTANCE_IP }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            # Update system
+            sudo apt update -y
+
+            # Install Docker
+            sudo apt install -y docker.io
+
+            # Start and enable Docker service
+            sudo systemctl start docker
+            sudo systemctl enable docker
+
+            # Verify Docker status (optional)
+            sudo systemctl status docker --no-pager
+
+            # Install Docker Compose
+            sudo apt install -y docker-compose
+
+            # Clone or pull repo
+            if [ ! -d "todo-app" ]; then
+              git clone https://github.com/YOUR_USERNAME/todo-app.git  todo-app
+            else
+              cd todo-app && git pull origin main
+            fi
+
+            # Pull and start containers
+            cd todo-app
+            docker-compose pull
+            docker-compose up -d
+
+      - name: Cleanup on Failure
+        if: ${{ failure() }}
+        run: |
+          echo "Build failed. Destroying infrastructure..."
+          terraform destroy -auto-approve \
+            -var "aws_access_key=${{ secrets.AWS_ACCESS_KEY_ID }}" \
+            -var "aws_secret_key=${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
+            -var "key_pair_name=${{ secrets.KEY_PAIR_NAME }}"

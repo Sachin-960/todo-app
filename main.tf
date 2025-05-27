@@ -22,22 +22,10 @@ variable "key_pair_name" {
   type = string
 }
 
-# EC2 Instance
-resource "aws_instance" "todo_app" {
-  ami           = "ami-084568db4383264d4" # Ubuntu 24.04
-  instance_type = "t2.micro"
-  key_name      = var.key_pair_name
-
-  tags = {
-    Name = "TodoAppServer"
-  }
-
-  vpc_security_group_ids = [aws_security_group.allow_ssh_http.id]
-}
-
-# Security Group
-resource "aws_security_group" "todo" {
-  name = "todo"
+# Security Group - Renamed to todo_app_sg
+resource "aws_security_group" "todo_app_sg" {
+  name        = "todo-app-sg"
+  description = "Allow SSH and HTTP traffic for Todo App"
 
   ingress {
     from_port   = 22
@@ -58,6 +46,18 @@ resource "aws_security_group" "todo" {
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# EC2 Instance - Using renamed SG
+resource "aws_instance" "todo_app" {
+  ami           = "ami-084568db4383264d4" # Ubuntu 24.04
+  instance_type = "t2.micro"
+  key_name      = var.key_pair_name
+  vpc_security_group_ids = [aws_security_group.todo_app_sg.id]  # Updated here
+
+  tags = {
+    Name = "TodoAppServer"
   }
 }
 

@@ -48,9 +48,7 @@ jobs:
         run: |
           INSTANCE_IP=$(terraform output -raw public_ip | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n 1)
           echo "INSTANCE_IP=$INSTANCE_IP" >> $GITHUB_ENV
-      - name: Wait for SSH
-        run: sleep 150
-        
+
       - name: Setup SSH Agent
         uses: webfactory/ssh-agent@v0.5.4
         with:
@@ -73,6 +71,9 @@ jobs:
             sudo systemctl start docker
             sudo systemctl enable docker
 
+            # Add ubuntu user to docker group
+            sudo usermod -aG docker ubuntu
+
             # Install Docker Compose
             sudo apt install -y docker-compose
 
@@ -85,7 +86,14 @@ jobs:
 
             # Build and start containers
             cd todo-app
-            docker-compose up -d --build
+            sudo docker-compose up -d --build
+
+      - name: Show Success Message with URL
+        run: |
+          echo ""
+          echo "✅ App deployed successfully!"
+          echo "👉 Access your app at: http://${{ env.INSTANCE_IP }}:3000/todos"
+          echo ""
 
       - name: Cleanup on Failure
         if: ${{ failure() }}
